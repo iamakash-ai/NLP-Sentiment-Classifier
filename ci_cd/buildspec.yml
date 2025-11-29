@@ -1,0 +1,75 @@
+version: 0.2
+
+# AWS CodeBuild buildspec for NLP project CI/CD
+# This file defines the build process for training and deployment
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.11
+    commands:
+      - echo "Installing dependencies..."
+      - pip install --upgrade pip
+      - pip install -r requirements.txt
+      - echo "Dependencies installed"
+
+  pre_build:
+    commands:
+      - echo "Running pre-build checks..."
+      - echo "Checking data file existence..."
+      - |
+        if [ -f "data/raw/training_data.csv" ]; then
+          echo "Training data found"
+        else
+          echo "Warning: Training data not found. Will be downloaded from S3"
+          aws s3 cp s3://$AWS_S3_BUCKET/data/training_data.csv data/raw/ || true
+        fi
+      - echo "Pre-build checks completed"
+
+  build:
+    commands:
+      - echo "Starting model training..."
+      - cd src
+      - python model_training.py
+      - echo "Model training completed"
+      - cd ..
+      - echo "Checking model files..."
+      - |
+        if [ -f "models/classifier.pkl" ] && [ -f "models/vectorizer.pkl" ]; then
+          echo "Model files created successfully"
+        else
+          echo "Error: Model files not found"
+          exit 1
+        fi
+
+  post_build:
+    commands:
+      - echo "Uploading artifacts to S3..."
+      - aws s3 cp models/classifier.pkl s3://$AWS_S3_BUCKET/models/
+      - aws s3 cp models/vectorizer.pkl s3://$AWS_S3_BUCKET/models/
+      - aws s3 cp training_results.json s3://$AWS_S3_BUCKET/results/ || true
+      - aws s3 cp confusion_matrix.png s3://$AWS_S3_BUCKET/results/ || true
+      - echo "Artifacts uploaded successfully"
+      - echo "Build completed successfully"
+
+artifacts:
+  files:
+    - 'models/**/*'
+    - 'src/**/*'
+    - 'data/**/*'
+    - 'streamlit_app.py'
+    - 'requirements.txt'
+    - 'training_results.json'
+    - 'confusion_matrix.png'
+  discard-paths: yes
+
+cache:
+  paths:
+    - '/root/.cache/pip/**/*'
+    - '/root/.cache/nltk_data/**/*'
+
+reports:
+  model_metrics:
+    files:
+      - 'training_results.json'
+    file-format: 'JSON'
